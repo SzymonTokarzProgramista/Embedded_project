@@ -1,0 +1,14 @@
+name: es
+
+services:
+  controller:
+    privileged: true
+    build: .
+    # devices:
+    #   - "/dev/gpiomem:/dev/gpiomem"
+    #   - "/dev/i2c-5:/dev/i2c-5"
+    #   - /dev:/dev
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DEBUG=1
+    restart: always
