@@ -1,2 +1,4 @@
 /embedded-venv/
 /dataset/
+/runs/optuna/
+yolo*.pt
