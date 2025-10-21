@@ -1,5 +1,4 @@
-import time
+import uvicorn
 
-while True:
-    print("siema")
-    time.sleep(1)
+if __name__ == "__main__":
+    uvicorn.run("src.api.blueprints:app", host="0.0.0.0", port=5000, reload=True)

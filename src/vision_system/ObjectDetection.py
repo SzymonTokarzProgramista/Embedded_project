@@ -15,3 +15,10 @@ class ObjectDetection:
     def detect_objects(self, image):
         results = self.model(image)
         return results
+    
+class Tracker:
+    def __init__(self):
+        pass
+
+    def track(self, detections):
+        pass

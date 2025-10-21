@@ -4,3 +4,4 @@ opencv-python==4.10.0.84
 numpy==1.26.4
 fastapi==0.116.2
 uvicorn==0.24.0
+pyrealsense2==2.50.0.3874
