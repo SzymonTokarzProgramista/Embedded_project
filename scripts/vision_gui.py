@@ -1,13 +1,18 @@
 """
-Tkinter YOLO Quick Test – real-time, bez wątków (używa .after()).
-- Wczytaj swój .pt (Ultralytics YOLO)
-- Start/Stop kamery z wyborem indeksu
-- Live predict na każdej klatce (checkbox)
-- Suwak conf
+Tkinter YOLO – responsywny podgląd + stabilny layout (grid).
+- Toolbar (wiersz 0) – zawsze widoczny
+- Podgląd (wiersz 1) – rozciąga się i skaluje obraz do ramki (nie zasłania przycisków)
+- Status (wiersz 2)
+- Kamera + inference w wątkach (GUI nie blokuje się)
+- Domyślny model: runs/train/final_best2/weights/best.pt (auto-load jeśli istnieje)
+- FPS rysowane na obrazie
 """
 
-import sys, time, platform
+import time
+import platform
+import threading
 from pathlib import Path
+from queue import Queue, Empty
 
 import cv2
 import numpy as np
@@ -21,72 +26,123 @@ try:
 except Exception:
     YOLO = None
 
+DEFAULT_MODEL_PATH = Path("runs/train/final_best2/weights/best.pt")
+
 
 class App:
-    def __init__(self, root):
+    def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("YOLO Quick Test – Tkinter (real-time)")
+        self.root.title("YOLO Quick Test – Threaded + Stable Layout")
+        self.root.minsize(950, 600)
 
-        # YOLO
+        # === Ustawienia YOLO ===
         self.model = None
         self.model_path = None
         self.class_names = {}
         self.conf = tk.DoubleVar(value=0.25)
         self.live = tk.BooleanVar(value=True)
 
-        # Kamera
+        # === Kamera / wątki ===
         self.cap = None
         self.cam_running = False
         self.cam_index = tk.IntVar(value=0)
+        self.capture_thread = None
+        self.infer_thread = None
+        self.stop_event = threading.Event()
 
-        # FPS
-        self._last_t = None
+        # Bufory
+        self.frame_queue = Queue(maxsize=1)   # drop stare, trzymaj najnowszą
+        self.display_frame = None             # ostatnia ramka do wyświetlenia
+
+        # FPS (liczone w wątku inferencyjnym)
         self._fps = 0.0
+        self._t_last = None
 
-        # UI top (kamera)
-        top = tk.Frame(root)
-        top.pack(fill=tk.X, padx=8, pady=(8, 0))
-        tk.Label(top, text="Kamera:").pack(side=tk.LEFT)
-        tk.Spinbox(top, from_=0, to=10, width=4, textvariable=self.cam_index).pack(side=tk.LEFT, padx=6)
-
-        # Podgląd
-        self.panel = tk.Label(root, text="Podgląd", bg="#222", fg="#ddd")
-        self.panel.pack(padx=8, pady=8, fill=tk.BOTH, expand=True)
-        self._tk_img = None  # referencja do PhotoImage
-
-        # Przyciski
-        btns = tk.Frame(root)
-        btns.pack(fill=tk.X, padx=8, pady=(0, 6))
-
-        tk.Button(btns, text="Wczytaj .pt", command=self.load_model).pack(side=tk.LEFT, padx=4)
-        tk.Button(btns, text="Start kamera", command=self.start_camera).pack(side=tk.LEFT, padx=4)
-        tk.Button(btns, text="Stop kamera", command=self.stop_camera).pack(side=tk.LEFT, padx=4)
-        tk.Label(btns, text="conf:").pack(side=tk.LEFT, padx=(16, 2))
-        tk.Scale(btns, from_=0.05, to=0.95, resolution=0.01, orient=tk.HORIZONTAL,
-                 variable=self.conf, length=180).pack(side=tk.LEFT)
-        tk.Checkbutton(btns, text="Live predict", variable=self.live).pack(side=tk.LEFT, padx=(16, 4))
-
-        tk.Button(btns, text="Otwórz obraz", command=self.open_image).pack(side=tk.LEFT, padx=4)
-        tk.Button(btns, text="Predict (1x)", command=self.predict_once).pack(side=tk.LEFT, padx=4)
-
-        # Status
-        self.status = tk.Label(root, text="Model: (brak) | FPS: --", anchor="w")
-        self.status.pack(fill=tk.X, padx=8, pady=(0, 8))
-
-        # Czcionka PIL
+        # Czcionka PIL do etykiet
         try:
             self.font = ImageFont.truetype("arial.ttf", 14)
         except Exception:
             self.font = ImageFont.load_default()
 
-        # Pętla odświeżania (co ~15 ms)
-        self.root.after(15, self._update_loop)
+        # === Layout: 3 wiersze ===
+        self.root.grid_rowconfigure(0, weight=0)  # toolbar
+        self.root.grid_rowconfigure(1, weight=1)  # preview
+        self.root.grid_rowconfigure(2, weight=0)  # status
+        self.root.grid_columnconfigure(0, weight=1)
+
+        # Toolbar (row=0)
+        toolbar = tk.Frame(self.root)
+        toolbar.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
+        toolbar.grid_columnconfigure(99, weight=1)
+
+        tk.Label(toolbar, text="Kamera:").grid(row=0, column=0, sticky="w")
+        tk.Spinbox(toolbar, from_=0, to=10, width=4, textvariable=self.cam_index)\
+            .grid(row=0, column=1, padx=(6, 12), sticky="w")
+
+        tk.Button(toolbar, text="Wczytaj .pt", command=self.load_model_dialog)\
+            .grid(row=0, column=2, padx=4, sticky="w")
+        tk.Button(toolbar, text="Start kamera", command=self.start_camera)\
+            .grid(row=0, column=3, padx=4, sticky="w")
+        tk.Button(toolbar, text="Stop kamera", command=self.stop_camera)\
+            .grid(row=0, column=4, padx=4, sticky="w")
+
+        tk.Label(toolbar, text="conf:").grid(row=0, column=5, padx=(16, 2), sticky="e")
+        tk.Scale(toolbar, from_=0.05, to=0.95, resolution=0.01, orient=tk.HORIZONTAL,
+                 variable=self.conf, length=180)\
+            .grid(row=0, column=6, sticky="w")
+
+        tk.Checkbutton(toolbar, text="Live predict", variable=self.live)\
+            .grid(row=0, column=7, padx=(16, 4), sticky="w")
+
+        tk.Button(toolbar, text="Otwórz obraz", command=self.open_image)\
+            .grid(row=0, column=8, padx=4, sticky="w")
+        tk.Button(toolbar, text="Predict (1x)", command=self.predict_once)\
+            .grid(row=0, column=9, padx=4, sticky="w")
+
+        # Preview (row=1)
+        preview_frame = tk.Frame(self.root, bd=1, relief="sunken")
+        preview_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=4)
+        preview_frame.grid_rowconfigure(0, weight=1)
+        preview_frame.grid_columnconfigure(0, weight=1)
+
+        self.panel = tk.Label(preview_frame, text="Podgląd", bg="#222", fg="#ddd")
+        self.panel.grid(row=0, column=0, sticky="nsew")
+        self._tk_img = None
+
+        # Status (row=2)
+        self.status = tk.Label(self.root, text="Model: (brak) | FPS: --", anchor="w")
+        self.status.grid(row=2, column=0, sticky="ew", padx=8, pady=(4, 8))
+
+        # Autoload modelu
+        self.try_load_default_model()
+
+        # Pętla renderująca (tylko UI)
+        self.root.after(15, self._ui_loop)
+
+        # Skróty
+        self.root.bind("<space>", lambda e: self.live.set(not self.live.get()))
+        self.root.bind("<Escape>", lambda e: self.stop_camera())
 
         # Zamknięcie
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    # === YOLO ===
-    def load_model(self):
+    # ===== Model =====
+    def try_load_default_model(self):
+        if YOLO is None:
+            self.status.config(text="Brak ultralytics (pip install ultralytics)")
+            return
+        if DEFAULT_MODEL_PATH.exists():
+            try:
+                self.model = YOLO(str(DEFAULT_MODEL_PATH))
+                self.model_path = str(DEFAULT_MODEL_PATH)
+                self.class_names = getattr(self.model, "names", {}) or {}
+                self.status.config(text=f"Model: {DEFAULT_MODEL_PATH.name} | FPS: -- (auto)")
+            except Exception as e:
+                messagebox.showerror("Błąd", f"Nie udało się załadować domyślnego modelu:\n{e}")
+        else:
+            self.status.config(text=f"Brak modelu: {DEFAULT_MODEL_PATH}")
+
+    def load_model_dialog(self):
         if YOLO is None:
             messagebox.showerror("Błąd", "Brak ultralytics. Zainstaluj: pip install ultralytics")
             return
@@ -103,10 +159,8 @@ class App:
             self.status.config(text=f"Model: {Path(path).name} | FPS: --")
         except Exception as e:
             messagebox.showerror("Błąd", f"Nie udało się załadować modelu:\n{e}")
-            self.model = None
-            self.model_path = None
 
-    # === Kamera ===
+    # ===== Kamera =====
     def start_camera(self):
         if self.cam_running:
             return
@@ -118,12 +172,22 @@ class App:
         if not cap.isOpened():
             messagebox.showerror("Błąd", f"Nie mogę otworzyć kamery {idx}")
             return
+
         self.cap = cap
         self.cam_running = True
-        self._last_t = time.time()
+        self.stop_event.clear()
+
+        self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self.capture_thread.start()
+
+        self.infer_thread = threading.Thread(target=self._infer_loop, daemon=True)
+        self.infer_thread.start()
+
+        self.status.config(text=f"Kamera {idx} START")
 
     def stop_camera(self):
         self.cam_running = False
+        self.stop_event.set()
         if self.cap is not None:
             try:
                 self.cap.release()
@@ -132,7 +196,54 @@ class App:
             self.cap = None
         self.status.config(text="Kamera zatrzymana")
 
-    # === Obraz z pliku ===
+    # ===== Wątki =====
+    def _capture_loop(self):
+        while not self.stop_event.is_set():
+            if self.cap is None:
+                break
+            ok, frame = self.cap.read()
+            if not ok:
+                time.sleep(0.005)
+                continue
+            # drop stary wpis w kolejce, trzymaj tylko najnowszą klatkę
+            if not self.frame_queue.empty():
+                try:
+                    _ = self.frame_queue.get_nowait()
+                except Empty:
+                    pass
+            self.frame_queue.put(frame)
+            time.sleep(0.001)
+
+    def _infer_loop(self):
+        self._t_last = time.time()
+        while not self.stop_event.is_set():
+            try:
+                frame = self.frame_queue.get(timeout=0.05)
+            except Empty:
+                continue
+
+            out = frame
+            if self.live.get() and self.model is not None:
+                try:
+                    out = self._infer_and_draw(frame)
+                except Exception as e:
+                    out = frame
+                    self.status.config(text=f"Błąd detekcji: {e}")
+
+            # FPS
+            now = time.time()
+            dt = now - (self._t_last or now)
+            self._t_last = now
+            if dt > 0:
+                self._fps = 1.0 / dt
+
+            # FPS overlay
+            cv2.putText(out, f"{self._fps:.1f} FPS", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2, cv2.LINE_AA)
+
+            self.display_frame = out
+
+    # ===== Otwieranie obrazu z pliku =====
     def open_image(self):
         path = filedialog.askopenfilename(
             title="Wybierz obraz",
@@ -144,60 +255,42 @@ class App:
         if img_bgr is None:
             messagebox.showerror("Błąd", "Nie udało się wczytać obrazu")
             return
-        self.show_bgr(img_bgr)
+        # pokaż obraz bez kamery; po włączeniu kamery podgląd ją nadpisze
+        self.display_frame = img_bgr
+        self._show_bgr(img_bgr)
 
-    # === Pętla odświeżania GUI ===
-    def _update_loop(self):
-        if self.cam_running and self.cap is not None:
-            ok, frame = self.cap.read()
-            if ok:
-                out = frame
-                if self.live.get() and self.model is not None:
-                    try:
-                        out = self._infer_and_draw(frame)
-                    except Exception as e:
-                        # pokaż klatkę bez detekcji + błąd w statusie
-                        out = frame
-                        self.status.config(
-                            text=f"Model: {Path(self.model_path).name if self.model_path else '(brak)'} | Błąd: {e}"
-                        )
+    # ===== UI render loop =====
+    def _ui_loop(self):
+        if self.display_frame is not None:
+            self._show_bgr(self.display_frame)
+            self.status.config(text=f"Model: {Path(self.model_path).name if self.model_path else '(brak)'}")
+        self.root.after(15, self._ui_loop)
 
-                # FPS
-                now = time.time()
-                dt = (now - self._last_t) if self._last_t else 0.0
-                self._last_t = now
-                if dt > 0:
-                    self._fps = 1.0 / dt
-
-                self.show_bgr(out)
-                self.status.config(
-                    text=f"Model: {Path(self.model_path).name if self.model_path else '(brak)'} | FPS: {self._fps:0.1f}"
-                )
-            else:
-                self.status.config(text="Brak klatki z kamery…")
-
-        # planuj następny tick
-        self.root.after(15, self._update_loop)
-
-    # === Jednorazowa predykcja na aktualnym obrazie (jeśli jest) ===
+    # ===== Predykcja 1x =====
     def predict_once(self):
         if self.model is None:
-            messagebox.showwarning("Uwaga", "Najpierw wczytaj model .pt")
+            messagebox.showwarning("Uwaga", "Najpierw załaduj model .pt")
             return
-        if self.cap is None:
-            messagebox.showwarning("Uwaga", "Kamera nie działa — uruchom ją albo wczytaj obraz")
+        frame = None
+        try:
+            frame = self.frame_queue.get_nowait()
+        except Empty:
+            frame = self.display_frame
+        if frame is None:
+            messagebox.showwarning("Uwaga", "Brak klatki z kamery – uruchom kamerę albo wczytaj obraz")
             return
-        ok, frame = self.cap.read()
-        if not ok:
-            messagebox.showwarning("Uwaga", "Brak klatki z kamery")
-            return
-        out = self._infer_and_draw(frame)
-        self.show_bgr(out)
+        try:
+            out = self._infer_and_draw(frame.copy())
+            cv2.putText(out, f"{self._fps:.1f} FPS", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2, cv2.LINE_AA)
+            self.display_frame = out
+        except Exception as e:
+            messagebox.showerror("Błąd", str(e))
 
-    # === Inference + rysowanie ===
+    # ===== Inference + rysowanie =====
     def _infer_and_draw(self, bgr):
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        results = self.model.predict(source=rgb, conf=float(self.conf.get()), iou = 0.4, verbose=False)
+        results = self.model.predict(source=rgb, conf=float(self.conf.get()), verbose=False)
         r = results[0]
 
         img = Image.fromarray(rgb)
@@ -205,7 +298,6 @@ class App:
 
         boxes = getattr(r, "boxes", None)
         if boxes is not None and len(boxes) > 0:
-            # Szybkie wyciąganie z tensorów
             xyxy = boxes.xyxy
             confs = boxes.conf
             clss = boxes.cls
@@ -217,13 +309,15 @@ class App:
                 xyxy = np.array(xyxy)
                 confs = np.array(confs)
                 clss = np.array(clss).astype(int)
-
             for (x1, y1, x2, y2), c, k in zip(xyxy, confs, clss):
                 x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
                 label = self.class_names.get(int(k), str(int(k)))
                 txt = f"{label} {float(c):.2f}"
                 draw.rectangle([x1, y1, x2, y2], outline=(0, 255, 0), width=2)
-                tw = draw.textlength(txt, font=self.font)
+                try:
+                    tw = draw.textlength(txt, font=self.font)
+                except Exception:
+                    tw = len(txt) * 7
                 th = getattr(self.font, "size", 14) + 6
                 y0 = max(0, y1 - th)
                 draw.rectangle([x1, y0, x1 + int(tw) + 6, y1], fill=(0, 255, 0))
@@ -231,13 +325,12 @@ class App:
 
         return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
-    # === Wyświetlanie w Label ===
-    def show_bgr(self, bgr):
-        # dopasuj do aktualnych wymiarów panelu
+    # ===== Wyświetlanie =====
+    def _show_bgr(self, bgr):
+        # skaluj do rozmiaru panelu w ramce preview (nie powiększaj layoutu)
         self.panel.update_idletasks()
         max_w = max(100, self.panel.winfo_width())
         max_h = max(100, self.panel.winfo_height())
-
         h, w = bgr.shape[:2]
         scale = min(max_w / w, max_h / h)
         new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
@@ -245,10 +338,12 @@ class App:
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         im = Image.fromarray(rgb)
         self._tk_img = ImageTk.PhotoImage(im)
-        self.panel.config(image=self._tk_img, text="")  # czyści tekst "Podgląd"
+        self.panel.config(image=self._tk_img, text="")
 
+    # ===== Zamknięcie =====
     def on_close(self):
         self.stop_camera()
+        self.stop_event.set()
         self.panel.config(image="", text="Zamykam…")
         self._tk_img = None
         self.root.update_idletasks()
@@ -257,7 +352,6 @@ class App:
 
 def main():
     root = tk.Tk()
-    root.geometry("1000x700")
     App(root)
     root.mainloop()
 
