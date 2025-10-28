@@ -7,13 +7,14 @@ services:
     container_name: es-controller
     privileged: true
     devices:
-      - /dev:/dev
+      - /dev/bus/usb:/dev/bus/usb
     # devices:
     #   - "/dev/bus/usb:/dev/bus/usb"   # RealSense przez USB
     #   - "/dev/video0:/dev/video0"     # UVC (dodaj video1/2 jeśli trzeba)
     environment:
       - PYTHONUNBUFFERED=1
       - DEBUG=1
+      - LD_LIBRARY_PATH=/usr/local/lib
     ports:
       - "5000:5000"
     restart: always
