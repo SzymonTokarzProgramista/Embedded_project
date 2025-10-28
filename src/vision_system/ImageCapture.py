@@ -27,10 +27,10 @@ class ImageCapture:
     def __init__(
         self,
         device: Optional[Union[str, int]] = None,
-        width: int = 640,
-        height: int = 480,
+        width: int = 1280,
+        height: int = 720,
         fps: int = 30,
-        warmup_frames: int = 5,
+        warmup_frames: int = 20,
     ) -> None:
         self.device = device
         self.width = int(width); self.height = int(height); self.fps = int(fps)
@@ -79,6 +79,7 @@ class ImageCapture:
 
     # ---------- RealSense ----------
     def _start_realsense(self) -> None:
+        print(f"[INFO] Uruchamiam RealSense (device={self.device})...")
         attempts = 2
         last_err: Optional[Exception] = None
         with _RS_LOCK:

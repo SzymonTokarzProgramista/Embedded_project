@@ -10,7 +10,7 @@ sudo mkswap /swapfile
 sudo swapon /swapfile
 
 echo "[INFO] Budowanie i uruchamianie kontenera..."
-docker compose up -d 
+docker compose up --build -d 
 
 echo "[INFO] Czekam na logi (CTRL+C aby zakończyć)..."
 docker compose logs -f

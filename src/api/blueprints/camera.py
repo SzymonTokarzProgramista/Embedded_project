@@ -2,7 +2,7 @@
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse, Response, JSONResponse
 from vision_system.ImageCapture import ImageCapture
-import cv2, time, glob, threading
+import cv2, time, glob, threading, os
 
 router = APIRouter(prefix="/camera", tags=["Camera"])
 
@@ -10,12 +10,16 @@ _shared_lock = threading.Lock()
 _shared_cap: ImageCapture | None = None
 _shared_clients = 0
 
+SAVE_DIR = "/Embedded_project/data/captures"
+os.makedirs(SAVE_DIR, exist_ok=True)
+
 def _normalize_device(camera):
     if camera is None or camera == "" or camera == "realsense": return None
     if isinstance(camera, str) and camera.startswith("/dev/video"):
         try: return int(camera.replace("/dev/video",""))
         except ValueError: return camera
     return camera
+
 
 @router.get("/devices")
 def devices():
@@ -33,16 +37,33 @@ def devices():
         info["realsense_error"] = str(e)
     return JSONResponse(info)
 
+
 @router.get("/snapshot.jpg")
 def snapshot(camera: str | None = None, quality: int = 85, w: int = 640, h: int = 480, fps: int = 30):
     cam_arg = _normalize_device(camera)
-    with ImageCapture(device=cam_arg, width=int(w), height=int(h), fps=int(fps)) as cap:
-        frame = cap.capture_image()
+    cap = ImageCapture(device=cam_arg, width=int(w), height=int(h), fps=int(fps))
+    frame = cap.capture_image()
+    cap.release()
     ok, jpg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
     return Response(content=jpg.tobytes(), media_type="image/jpeg") if ok else Response(status_code=500)
 
+
+@router.post("/save")
+def save_snapshot(camera: str | None = None, w: int = 1280, h: int = 720, fps: int = 30):
+    """Zapisz pojedyncze zdjęcie do katalogu data/captures/"""
+    cam_arg = _normalize_device(camera)
+    cap = ImageCapture(device=cam_arg, width=int(w), height=int(h), fps=int(fps))
+    frame = cap.capture_image()
+    cap.release()
+
+    filename = f"capture_{int(time.time())}.jpg"
+    path = os.path.join(SAVE_DIR, filename)
+    cv2.imwrite(path, frame)
+    return {"status": "ok", "file": filename}
+
+
 @router.get("/stream")
-def stream(camera: str | None = None, fps: int = 15, quality: int = 80, w: int = 640, h: int = 480):
+def stream(camera: str | None = None, fps: int = 15, quality: int = 80, w: int = 1280, h: int = 720):
     global _shared_cap, _shared_clients
     cam_arg = _normalize_device(camera)
 
