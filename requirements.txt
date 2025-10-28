@@ -1,7 +1,6 @@
 RPi.GPIO==0.7.1
 ultralytics==8.0.134
-opencv-python==4.10.0.84
+opencv-python-headless==4.10.0.84
 numpy==1.26.4
 fastapi==0.116.2
 uvicorn==0.24.0
-pyrealsense2==2.50.0.3874

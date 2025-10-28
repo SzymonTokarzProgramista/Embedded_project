@@ -1,62 +1,41 @@
+# src/api/blueprints/system.py
 from fastapi import APIRouter
-import platform
-import psutil
+import psutil, platform, os, time
+from datetime import datetime
 
-router = APIRouter(
-    prefix="/system",
-    tags=["System"]
-)
-
+router = APIRouter(prefix="/system", tags=["System"])
+_START = time.time()
 
 @router.get("/info")
-def system_info():
-    """Basic system information."""
+def info():
     return {
-        "hostname": platform.node(),
-        "os": platform.system(),
-        "os_version": platform.version(),
-        "architecture": platform.machine(),
-        "python_version": platform.python_version()
+        "system": platform.system(),
+        "node": platform.node(),
+        "release": platform.release(),
+        "version": platform.version(),
+        "machine": platform.machine(),
+        "python": platform.python_version(),
+        "boot_time": datetime.fromtimestamp(psutil.boot_time()).isoformat(),
     }
-
-
-@router.get("/memory")
-def memory_usage():
-    """RAM usage statistics."""
-    mem = psutil.virtual_memory()
-    return {
-        "total_mb": round(mem.total / 1024**2, 2),
-        "used_mb": round(mem.used / 1024**2, 2),
-        "available_mb": round(mem.available / 1024**2, 2),
-        "percent": mem.percent
-    }
-
-
-@router.get("/disk")
-def disk_usage():
-    """Disk usage for root partition."""
-    disk = psutil.disk_usage('/')
-    return {
-        "total_gb": round(disk.total / 1024**3, 2),
-        "used_gb": round(disk.used / 1024**3, 2),
-        "free_gb": round(disk.free / 1024**3, 2),
-        "percent": disk.percent
-    }
-
 
 @router.get("/cpu")
-def cpu_stats():
-    """CPU utilization and temperature (if available)."""
-    cpu_temp = None
-    try:
-        with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
-            cpu_temp = round(int(f.read()) / 1000.0, 1)
-    except FileNotFoundError:
-        pass
-
+def cpu():
     return {
-        "cpu_percent": psutil.cpu_percent(interval=0.5),
-        "cpu_cores": psutil.cpu_count(logical=False),
-        "cpu_threads": psutil.cpu_count(logical=True),
-        "cpu_temp_celsius": cpu_temp
+        "cpu_percent": psutil.cpu_percent(interval=0.3),
+        "cpus": psutil.cpu_count(),
+        "load_avg": os.getloadavg() if hasattr(os, "getloadavg") else None,
     }
+
+@router.get("/memory")
+def memory():
+    m = psutil.virtual_memory()
+    return {"total": m.total, "used": m.used, "available": m.available, "percent": m.percent}
+
+@router.get("/disk")
+def disk():
+    d = psutil.disk_usage("/")
+    return {"total": d.total, "used": d.used, "free": d.free, "percent": d.percent}
+
+@router.get("/uptime")
+def uptime():
+    return {"seconds": round(time.time() - _START, 1)}

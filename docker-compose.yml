@@ -2,13 +2,20 @@ name: es
 
 services:
   controller:
-    privileged: true
     build: .
+    image: es-controller:latest
+    container_name: es-controller
+    privileged: true
     devices:
       - /dev:/dev
+    # devices:
+    #   - "/dev/bus/usb:/dev/bus/usb"   # RealSense przez USB
+    #   - "/dev/video0:/dev/video0"     # UVC (dodaj video1/2 jeśli trzeba)
     environment:
       - PYTHONUNBUFFERED=1
       - DEBUG=1
     ports:
-      - 5000:5000
+      - "5000:5000"
     restart: always
+    working_dir: /Embedded_project
+    command: ["python", "-u", "app.py"]
