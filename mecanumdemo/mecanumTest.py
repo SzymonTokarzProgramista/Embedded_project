@@ -8,13 +8,14 @@ import math
 ser = serial.Serial('/dev/ttyUSB0', 19200, timeout=1)  # Adjust port as needed
 time.sleep(2)
 
+print('Open serial')
 
 try:
     while True:
         request = mecanum_pb2.ControlRequest()
-        request.speed_mmps = 100    # Move forward at 0-500 mm/s
+        request.speed_mmps = 50    # Move forward at 0-500 mm/s
         request.rad = 0.5 * math.pi     # Straight line 0-2*PI, pi/2 is straight, 0 is right
-        request.omega = -2.0         # Rotation speed in rad/s, positive is CCW, range 0-2 rad/s
+        request.omega = -0.0         # Rotation speed in rad/s, positive is CCW, range 0-2 rad/s
         
         serialized_data = request.SerializeToString()
         ser.write(serialized_data)

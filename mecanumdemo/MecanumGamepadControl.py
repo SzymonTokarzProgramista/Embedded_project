@@ -45,7 +45,7 @@ button_states = {}
 
 # Ustawienia komunikacji z robotem
 try:
-    ser = serial.Serial('/dev/ttyUSB0', 19200, timeout=1)  # Dostosuj port według potrzeb
+    ser = serial.Serial('/dev/ttyUSB1', 19200, timeout=1)  # Dostosuj port według potrzeb
     time.sleep(2)
     print("Połączono z robotem przez port /dev/ttyUSB0")
     robot_connected = True
