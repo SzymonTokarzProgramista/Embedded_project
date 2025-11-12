@@ -80,7 +80,7 @@ def _get_detector(backend: Optional[str] = None,
                 "Upewnij się, że dodałeś vision_system/detectors.py oraz wymagane pakiety."
             )
         # utwórz nowy detektor
-        det = build_detector(backend=b, model_path=m, conf=c, iou=i)  # type: ignore
+        det = build_detector(backend=b, model_path=m, conf=c, iou=i, imgsz=416)  # type: ignore
         _shared_detector = det
         _shared_backend, _shared_model_path, _shared_conf, _shared_iou = b, m, c, i
 
@@ -177,9 +177,8 @@ def stream(
                         except Exception as e:
                             # narysuj ostrzeżenie na ramce, zamiast wywalać stream
                             vis = frame.copy()
-                            warn = f"Detection error: {e}"
-                            print(f"[WARN] {warn}")
-                            cv2.putText(vis, warn, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                            print("Detection error:", str(e))
+                            cv2.putText(vis, str(e), (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
                     else:
                         vis = frame.copy()
                         warn = "Detector module not available"
